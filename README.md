@@ -14,7 +14,7 @@ Chrome extension (MV3, vanilla JS) that watches WhatsApp Web and votes on newly 
   3. Skip if neither index exists.
 - New-poll-only behavior after arm (historical content ignored).
 - Single-attempt semantics per poll key (dedupe protection).
-- Operates only when WhatsApp tab is visible and focused.
+- Operates when WhatsApp tab is visible.
 - Armed state persists across reload; indexes do not.
 
 ## Load Unpacked
@@ -29,6 +29,7 @@ Chrome extension (MV3, vanilla JS) that watches WhatsApp Web and votes on newly 
 
 - **State**: Armed/Disarmed (+ index required state).
 - **Result**: Last outcome code (`primary_voted`, etc.).
+  - UI may show `armed_waiting_poll` while armed and waiting for the first new poll.
 - **Latency**: Last measured detect-to-click dispatch latency.
 - **Focus/Visibility**: Current eligibility state.
 

@@ -28,7 +28,7 @@ Use this checklist after loading the unpacked extension in Chrome and opening `h
 6. Stay armed and switch to another chat containing old polls.
    - Expected: no vote on historical content after switch, status `skipped_not_new` for initial load mutations.
 7. Keep extension armed and move WhatsApp tab to background.
-   - Expected: no voting while hidden/not-focused.
+   - Expected: no voting while page is hidden.
 8. Reload WhatsApp while extension is armed.
    - Expected: restored as armed with `blocked_index_required`; no votes until indexes are entered again.
 9. Check latency after a successful vote.

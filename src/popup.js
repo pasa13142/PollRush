@@ -55,7 +55,8 @@ function renderStatus(status) {
       : "Armed"
     : "Disarmed";
 
-  elements.lastResult.textContent = status?.lastResult || "-";
+  const lastResultRaw = status?.lastResult || "-";
+  elements.lastResult.textContent = armed && lastResultRaw === "disarmed" ? "armed_waiting_poll" : lastResultRaw;
 
   if (typeof status?.lastLatencyMs === "number" && Number.isFinite(status.lastLatencyMs)) {
     elements.lastLatency.textContent = `${status.lastLatencyMs.toFixed(2)} ms`;
