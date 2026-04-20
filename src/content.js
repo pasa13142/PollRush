@@ -30,7 +30,12 @@
     "div[role='row']"
   ];
 
-  const OPTION_QUERY = "[role='radio'], [role='checkbox']";
+  const OPTION_QUERY =
+    "[role='radio'], [role='checkbox'], [aria-checked='true'], [aria-checked='false'], [data-testid*='poll-option'], [data-testid*='poll_option']";
+  const MESSAGE_SCAN_QUERY =
+    "[data-id], [data-testid='msg-container'], [data-testid*='msg-container'], div[role='row']";
+  const RECENT_MESSAGE_SCAN_LIMIT = 16;
+  const SUCCESS_FINGERPRINT_TTL_MS = 10 * 60 * 1000;
   const MAX_TRACKED_KEYS = 2000;
 
   const state = {
@@ -56,6 +61,8 @@
   const baselinePollKeys = new Set();
   /** @type {Set<string>} */
   const processedPollKeys = new Set();
+  /** @type {Map<string, number>} */
+  const successfulPollFingerprints = new Map();
 
   function addTrackedKey(set, key) {
     if (!key) {
@@ -76,6 +83,7 @@
   function clearTrackedKeys() {
     baselinePollKeys.clear();
     processedPollKeys.clear();
+    successfulPollFingerprints.clear();
   }
 
   function parsePositiveIndex(value) {
@@ -109,7 +117,8 @@
   }
 
   function isInteractionAllowed() {
-    return document.visibilityState === "visible" && document.hasFocus();
+    // Popup focus can temporarily steal page focus; visibility is the hard gate.
+    return document.visibilityState === "visible";
   }
 
   function setLastResult(result, details = {}) {
@@ -138,10 +147,10 @@
     const selectedChatId =
       selectedChatItem?.getAttribute("data-id") ||
       selectedChatItem?.getAttribute("data-testid") ||
-      "";
-    const header = document.querySelector("#main header");
-    const headerText = header?.textContent?.replace(/\s+/g, " ").trim() || "unknown-chat";
-    return `${window.location.pathname}${window.location.hash}|${selectedChatId}|${headerText}`;
+      selectedChatItem?.id ||
+      selectedChatItem?.querySelector("a[href]")?.getAttribute("href") ||
+      "unknown-chat";
+    return `${window.location.pathname}${window.location.hash}|${selectedChatId}`;
   }
 
   function buildDomPath(node, root) {
@@ -185,13 +194,33 @@
     let current = optionNode;
 
     while (current && current !== messageRoot) {
-      if (current.matches("button, [role='radio'], [role='checkbox']")) {
+      if (current.matches("button, [role='radio'], [role='checkbox'], [aria-checked]")) {
         return current;
       }
       current = current.parentElement;
     }
 
     return optionNode;
+  }
+
+  function isPollishOption(optionNode, clickableNode, messageRoot) {
+    const role = clickableNode.getAttribute("role");
+    if (role === "radio" || role === "checkbox") {
+      return true;
+    }
+
+    if (clickableNode.hasAttribute("aria-checked") || optionNode.hasAttribute("aria-checked")) {
+      return true;
+    }
+
+    const clickableTestId = (clickableNode.getAttribute("data-testid") || "").toLowerCase();
+    const optionTestId = (optionNode.getAttribute("data-testid") || "").toLowerCase();
+    if (clickableTestId.includes("poll") || optionTestId.includes("poll")) {
+      return true;
+    }
+
+    const pollAncestor = optionNode.closest("[data-testid*='poll']");
+    return Boolean(pollAncestor && messageRoot.contains(pollAncestor));
   }
 
   function extractPollOptions(messageRoot) {
@@ -208,7 +237,15 @@
         continue;
       }
 
+      if (!isPollishOption(option, clickable, messageRoot)) {
+        continue;
+      }
+
       if (clickable.getAttribute("aria-disabled") === "true") {
+        continue;
+      }
+
+      if (clickable.hasAttribute("disabled")) {
         continue;
       }
 
@@ -235,6 +272,34 @@
     }
 
     return element.textContent?.replace(/\s+/g, " ").trim() || "";
+  }
+
+  function buildPollFingerprint(pollOptions) {
+    return pollOptions
+      .map((node, index) => `${index + 1}:${extractOptionLabel(node).toLowerCase()}`)
+      .join("|")
+      .slice(0, 400);
+  }
+
+  function pruneSuccessfulFingerprints(nowMs) {
+    for (const [fingerprint, timestamp] of successfulPollFingerprints.entries()) {
+      if (nowMs - timestamp > SUCCESS_FINGERPRINT_TTL_MS) {
+        successfulPollFingerprints.delete(fingerprint);
+      }
+    }
+  }
+
+  function isOptionAlreadySelected(optionNode) {
+    if (!optionNode) {
+      return false;
+    }
+
+    if (optionNode.getAttribute("aria-checked") === "true") {
+      return true;
+    }
+
+    const nestedSelected = optionNode.querySelector("[aria-checked='true']");
+    return Boolean(nestedSelected);
   }
 
   function buildPollKey(messageRoot, pollOptions) {
@@ -292,13 +357,20 @@
       return;
     }
 
+    pruneSuccessfulFingerprints(performance.now());
+    const pollFingerprint = buildPollFingerprint(options);
+
     const pollKey = buildPollKey(messageRoot, options);
     if (!pollKey) {
       return;
     }
 
+    if (successfulPollFingerprints.has(pollFingerprint)) {
+      setLastResult(RESULT.SKIPPED_DUPLICATE, { pollKey });
+      return;
+    }
+
     if (baselinePollKeys.has(pollKey)) {
-      addTrackedKey(processedPollKeys, pollKey);
       setLastResult(RESULT.SKIPPED_NOT_NEW, { pollKey });
       return;
     }
@@ -310,14 +382,12 @@
 
     if (performance.now() < chatSwitchIgnoreUntilMs) {
       addTrackedKey(baselinePollKeys, pollKey);
-      addTrackedKey(processedPollKeys, pollKey);
       setLastResult(RESULT.SKIPPED_NOT_NEW, { pollKey });
       return;
     }
 
     if (!isInteractionAllowed()) {
       addTrackedKey(baselinePollKeys, pollKey);
-      addTrackedKey(processedPollKeys, pollKey);
       setLastResult(RESULT.SKIPPED_NOT_NEW, { pollKey });
       return;
     }
@@ -354,9 +424,16 @@
     // We mark the poll as processed before click to ensure single-attempt semantics.
     addTrackedKey(processedPollKeys, pollKey);
 
+    if (isOptionAlreadySelected(target)) {
+      successfulPollFingerprints.set(pollFingerprint, performance.now());
+      setLastResult(RESULT.SKIPPED_DUPLICATE, { pollKey, usedIndex });
+      return;
+    }
+
     try {
       dispatchFastClick(target);
       const clickedAtMs = performance.now();
+      successfulPollFingerprints.set(pollFingerprint, clickedAtMs);
 
       /** @type {PollEventRecord} */
       const eventRecord = {
@@ -408,6 +485,27 @@
     }
   }
 
+  function getRecentMessageRoots(container) {
+    const roots = Array.from(container.querySelectorAll(MESSAGE_SCAN_QUERY));
+    if (roots.length <= RECENT_MESSAGE_SCAN_LIMIT) {
+      return roots;
+    }
+    return roots.slice(roots.length - RECENT_MESSAGE_SCAN_LIMIT);
+  }
+
+  function addRecentPollCandidates(sink) {
+    const container = observedChatContainer || getActiveChatContainer();
+    if (!container) {
+      return;
+    }
+
+    for (const messageRoot of getRecentMessageRoots(container)) {
+      if (messageRoot.querySelector(OPTION_QUERY)) {
+        sink.add(messageRoot);
+      }
+    }
+  }
+
   function handleMutations(mutations) {
     if (!state.armed) {
       return;
@@ -421,6 +519,9 @@
         collectCandidateMessageRoots(addedNode, candidates);
       }
     }
+
+    // Fallback scan protects against DOM variants where mutation targets miss option nodes.
+    addRecentPollCandidates(candidates);
 
     for (const messageRoot of candidates) {
       processPollCandidate(messageRoot, detectedAtMs);
@@ -485,6 +586,23 @@
     }
   }
 
+  function fallbackTailScan() {
+    if (!state.armed) {
+      return;
+    }
+
+    const candidates = new Set();
+    addRecentPollCandidates(candidates);
+    if (!candidates.size) {
+      return;
+    }
+
+    const detectedAtMs = performance.now();
+    for (const messageRoot of candidates) {
+      processPollCandidate(messageRoot, detectedAtMs);
+    }
+  }
+
   function persistArmedState(armed) {
     return new Promise((resolve) => {
       chrome.storage.local.set({ [STORAGE_KEYS.armed]: Boolean(armed) }, resolve);
@@ -514,12 +632,12 @@
     if (!wasArmed) {
       clearTrackedKeys();
       activeChatSignature = readActiveChatSignature();
-      chatSwitchIgnoreUntilMs = performance.now() + 700;
+      chatSwitchIgnoreUntilMs = performance.now() + 150;
       captureBaselinePolls();
     }
 
     if (wasWaitingForIndex && !state.waitingForIndex) {
-      chatSwitchIgnoreUntilMs = performance.now() + 250;
+      chatSwitchIgnoreUntilMs = performance.now() + 150;
       captureBaselinePolls();
     }
 
@@ -578,7 +696,8 @@
     }
 
     activeChatSignature = signature;
-    chatSwitchIgnoreUntilMs = performance.now() + 900;
+    clearTrackedKeys();
+    chatSwitchIgnoreUntilMs = performance.now() + 600;
     captureBaselinePolls();
   }
 
@@ -612,6 +731,7 @@
       }
       checkChatSwitch();
       ensureObserver();
+      fallbackTailScan();
     }, 250);
 
     document.addEventListener("visibilitychange", () => {
@@ -645,7 +765,7 @@
 
           clearTrackedKeys();
           activeChatSignature = readActiveChatSignature();
-          chatSwitchIgnoreUntilMs = performance.now() + 900;
+          chatSwitchIgnoreUntilMs = performance.now() + 400;
           captureBaselinePolls();
           ensureObserver();
         } else {
