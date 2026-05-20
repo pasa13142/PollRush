@@ -63,6 +63,8 @@
   const processedPollKeys = new Set();
   /** @type {Map<string, number>} */
   const successfulPollFingerprints = new Map();
+  /** @type {WeakSet<Element>} */
+  let baselinePollRoots = new WeakSet();
 
   function addTrackedKey(set, key) {
     if (!key) {
@@ -84,6 +86,7 @@
     baselinePollKeys.clear();
     processedPollKeys.clear();
     successfulPollFingerprints.clear();
+    baselinePollRoots = new WeakSet();
   }
 
   function parsePositiveIndex(value) {
@@ -477,6 +480,12 @@
       return;
     }
 
+    if (baselinePollRoots.has(messageRoot)) {
+      addTrackedKey(baselinePollKeys, pollKey);
+      setLastResult(RESULT.SKIPPED_NOT_NEW, { pollKey });
+      return;
+    }
+
     if (successfulPollFingerprints.has(pollFingerprint)) {
       setLastResult(RESULT.SKIPPED_DUPLICATE, { pollKey });
       return;
@@ -618,6 +627,18 @@
     }
   }
 
+  function getNewestCandidate(candidates) {
+    let newestCandidate = null;
+
+    for (const candidate of candidates) {
+      if (!newestCandidate || compareDocumentPosition(newestCandidate, candidate) < 0) {
+        newestCandidate = candidate;
+      }
+    }
+
+    return newestCandidate;
+  }
+
   function handleMutations(mutations) {
     if (!state.armed) {
       return;
@@ -635,8 +656,9 @@
     // Fallback scan protects against DOM variants where mutation targets miss option nodes.
     addRecentPollCandidates(candidates);
 
-    for (const messageRoot of candidates) {
-      processPollCandidate(messageRoot, detectedAtMs);
+    const newestCandidate = getNewestCandidate(candidates);
+    if (newestCandidate) {
+      processPollCandidate(newestCandidate, detectedAtMs);
     }
   }
 
@@ -694,6 +716,7 @@
         continue;
       }
       const key = buildPollKey(messageRoot, options);
+      baselinePollRoots.add(messageRoot);
       addTrackedKey(baselinePollKeys, key);
     }
   }
@@ -710,8 +733,9 @@
     }
 
     const detectedAtMs = performance.now();
-    for (const messageRoot of candidates) {
-      processPollCandidate(messageRoot, detectedAtMs);
+    const newestCandidate = getNewestCandidate(candidates);
+    if (newestCandidate) {
+      processPollCandidate(newestCandidate, detectedAtMs);
     }
   }
 
