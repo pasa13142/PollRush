@@ -898,6 +898,8 @@
     return {
       armed: state.armed,
       waitingForIndex: state.waitingForIndex,
+      primaryIndex: state.primaryIndex,
+      secondaryIndex: state.secondaryIndex,
       sourceModeEnabled: state.sourceModeEnabled,
       sourceText: state.sourceText,
       lastResult: state.lastResult,

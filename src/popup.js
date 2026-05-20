@@ -9,6 +9,7 @@ const elements = {
   disarmButton: document.getElementById("disarmButton"),
   errorText: document.getElementById("errorText"),
   armedState: document.getElementById("armedState"),
+  armedParams: document.getElementById("armedParams"),
   lastResult: document.getElementById("lastResult"),
   lastLatency: document.getElementById("lastLatency"),
   focusVisibility: document.getElementById("focusVisibility")
@@ -56,6 +57,27 @@ function syncSourceModeControls() {
   elements.secondaryIndex.disabled = sourceModeEnabled;
 }
 
+function formatArmedParams(status) {
+  if (!status?.armed) {
+    return "-";
+  }
+
+  if (status.sourceModeEnabled) {
+    const sourceText = String(status.sourceText || "").trim();
+    return sourceText ? `source="${sourceText}"` : "source required";
+  }
+
+  const primaryIndex = Number.isInteger(status.primaryIndex) ? status.primaryIndex : null;
+  const secondaryIndex = Number.isInteger(status.secondaryIndex) ? status.secondaryIndex : null;
+  const parts = [`primary=${primaryIndex ?? "required"}`];
+
+  if (secondaryIndex !== null) {
+    parts.push(`secondary=${secondaryIndex}`);
+  }
+
+  return parts.join(", ");
+}
+
 function renderStatus(status) {
   const armed = Boolean(status?.armed);
   const waitingForIndex = Boolean(status?.waitingForIndex);
@@ -65,6 +87,7 @@ function renderStatus(status) {
       ? "Armed (index required)"
       : "Armed"
     : "Disarmed";
+  elements.armedParams.textContent = formatArmedParams(status);
 
   const lastResultRaw = status?.lastResult || "-";
   elements.lastResult.textContent = armed && lastResultRaw === "disarmed" ? "armed_waiting_poll" : lastResultRaw;
