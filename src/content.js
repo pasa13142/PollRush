@@ -8,6 +8,7 @@
   const RESULT = Object.freeze({
     PRIMARY_VOTED: "primary_voted",
     SECONDARY_VOTED: "secondary_voted",
+    SOURCE_VOTED: "source_voted",
     SKIPPED_NO_INDEX: "skipped_no_index",
     SKIPPED_NOT_NEW: "skipped_not_new",
     SKIPPED_DUPLICATE: "skipped_duplicate",
@@ -42,6 +43,8 @@
     armed: false,
     primaryIndex: null,
     secondaryIndex: null,
+    sourceModeEnabled: false,
+    sourceText: "",
     waitingForIndex: false,
     lastResult: RESULT.DISARMED,
     lastLatencyMs: null,
@@ -456,6 +459,92 @@
     return options[zeroBased] || null;
   }
 
+  function normalizeForSourceMatch(value) {
+    return String(value || "")
+      .toLocaleLowerCase("tr-TR")
+      .normalize("NFKC")
+      .replace(/\s+/g, "")
+      .trim();
+  }
+
+  function levenshteinDistance(left, right) {
+    if (left === right) {
+      return 0;
+    }
+
+    if (!left) {
+      return right.length;
+    }
+
+    if (!right) {
+      return left.length;
+    }
+
+    const previous = Array.from({ length: right.length + 1 }, (_value, index) => index);
+    const current = new Array(right.length + 1);
+
+    for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+      current[0] = leftIndex;
+
+      for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+        const substitutionCost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+        current[rightIndex] = Math.min(
+          previous[rightIndex] + 1,
+          current[rightIndex - 1] + 1,
+          previous[rightIndex - 1] + substitutionCost
+        );
+      }
+
+      for (let index = 0; index < previous.length; index += 1) {
+        previous[index] = current[index];
+      }
+    }
+
+    return previous[right.length];
+  }
+
+  function calculateSourceMatchScore(source, candidate) {
+    if (!source || !candidate) {
+      return Number.POSITIVE_INFINITY;
+    }
+
+    const distance = levenshteinDistance(source, candidate);
+    const extraLength = Math.max(0, candidate.length - source.length);
+    const missingLength = Math.max(0, source.length - candidate.length);
+    const prefixPenalty = candidate.startsWith(source) ? 0 : 2;
+
+    return distance + extraLength * 2 + missingLength + prefixPenalty;
+  }
+
+  function selectOptionBySource(options, sourceText) {
+    const source = normalizeForSourceMatch(sourceText);
+    if (!source) {
+      return null;
+    }
+
+    let bestMatch = null;
+
+    options.forEach((option, index) => {
+      const candidate = normalizeForSourceMatch(extractOptionLabel(option));
+      const score = calculateSourceMatchScore(source, candidate);
+
+      if (!bestMatch || score < bestMatch.score) {
+        bestMatch = {
+          option,
+          index: index + 1,
+          score
+        };
+      }
+    });
+
+    return bestMatch?.option
+      ? {
+          option: bestMatch.option,
+          index: bestMatch.index
+        }
+      : null;
+  }
+
   /**
    * @typedef {Object} PollEventRecord
    * @property {string} pollKey
@@ -513,30 +602,47 @@
       return;
     }
 
-    if (state.waitingForIndex || !Number.isInteger(state.primaryIndex)) {
+    if (state.sourceModeEnabled && !state.sourceText.trim()) {
       addTrackedKey(processedPollKeys, pollKey);
       setLastResult(RESULT.BLOCKED_INDEX_REQUIRED, { pollKey });
       return;
     }
 
-    const primaryOption = selectOptionByIndex(options, state.primaryIndex);
-    const secondaryOption = Number.isInteger(state.secondaryIndex)
-      ? selectOptionByIndex(options, state.secondaryIndex)
-      : null;
+    if (!state.sourceModeEnabled && (state.waitingForIndex || !Number.isInteger(state.primaryIndex))) {
+      addTrackedKey(processedPollKeys, pollKey);
+      setLastResult(RESULT.BLOCKED_INDEX_REQUIRED, { pollKey });
+      return;
+    }
 
     let target = null;
     let outcome = RESULT.SKIPPED_NO_INDEX;
     let usedIndex = null;
 
-    if (primaryOption) {
-      target = primaryOption;
-      outcome = RESULT.PRIMARY_VOTED;
-      usedIndex = state.primaryIndex;
-    } else if (secondaryOption) {
-      target = secondaryOption;
-      outcome = RESULT.SECONDARY_VOTED;
-      usedIndex = state.secondaryIndex;
+    if (state.sourceModeEnabled) {
+      const sourceMatch = selectOptionBySource(options, state.sourceText);
+      if (sourceMatch) {
+        target = sourceMatch.option;
+        outcome = RESULT.SOURCE_VOTED;
+        usedIndex = sourceMatch.index;
+      }
     } else {
+      const primaryOption = selectOptionByIndex(options, state.primaryIndex);
+      const secondaryOption = Number.isInteger(state.secondaryIndex)
+        ? selectOptionByIndex(options, state.secondaryIndex)
+        : null;
+
+      if (primaryOption) {
+        target = primaryOption;
+        outcome = RESULT.PRIMARY_VOTED;
+        usedIndex = state.primaryIndex;
+      } else if (secondaryOption) {
+        target = secondaryOption;
+        outcome = RESULT.SECONDARY_VOTED;
+        usedIndex = state.secondaryIndex;
+      }
+    }
+
+    if (!target) {
       addTrackedKey(processedPollKeys, pollKey);
       setLastResult(RESULT.SKIPPED_NO_INDEX, { pollKey });
       return;
@@ -749,6 +855,8 @@
     state.armed = false;
     state.primaryIndex = null;
     state.secondaryIndex = null;
+    state.sourceModeEnabled = false;
+    state.sourceText = "";
     state.waitingForIndex = false;
     setLastResult(RESULT.DISARMED);
 
@@ -756,14 +864,16 @@
     stopObserver();
   }
 
-  function armRuntime({ primaryIndex, secondaryIndex }) {
+  function armRuntime({ primaryIndex, secondaryIndex, sourceModeEnabled, sourceText }) {
     const wasArmed = state.armed;
     const wasWaitingForIndex = state.waitingForIndex;
 
     state.armed = true;
     state.primaryIndex = primaryIndex;
     state.secondaryIndex = secondaryIndex;
-    state.waitingForIndex = !Number.isInteger(primaryIndex);
+    state.sourceModeEnabled = Boolean(sourceModeEnabled);
+    state.sourceText = String(sourceText || "").trim();
+    state.waitingForIndex = state.sourceModeEnabled ? !state.sourceText : !Number.isInteger(primaryIndex);
 
     if (!wasArmed) {
       clearTrackedKeys();
@@ -788,6 +898,8 @@
     return {
       armed: state.armed,
       waitingForIndex: state.waitingForIndex,
+      sourceModeEnabled: state.sourceModeEnabled,
+      sourceText: state.sourceText,
       lastResult: state.lastResult,
       lastLatencyMs: state.lastLatencyMs,
       lastPollKey: state.lastPollKey,
@@ -811,10 +923,14 @@
 
     const primaryIndex = parsePositiveIndex(payload?.primaryIndex);
     const secondaryIndex = parsePositiveIndex(payload?.secondaryIndex);
+    const sourceModeEnabled = Boolean(payload?.sourceModeEnabled);
+    const sourceText = String(payload?.sourceText || "").trim();
 
     armRuntime({
       primaryIndex,
-      secondaryIndex
+      secondaryIndex,
+      sourceModeEnabled,
+      sourceText
     });
 
     await persistArmedState(true);
@@ -896,6 +1012,8 @@
           state.armed = true;
           state.primaryIndex = null;
           state.secondaryIndex = null;
+          state.sourceModeEnabled = false;
+          state.sourceText = "";
           state.waitingForIndex = true;
           setLastResult(RESULT.BLOCKED_INDEX_REQUIRED);
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WhatsApp Web Ultra-Fast Poll Auto-Voter",
-  "description": "Automatically votes on new WhatsApp Web polls in the active chat using primary/secondary index fallback.",
+  "description": "Automatically votes on new WhatsApp Web polls using index fallback or source text matching.",
   "version": "0.1.0",
   "permissions": [
     "storage",

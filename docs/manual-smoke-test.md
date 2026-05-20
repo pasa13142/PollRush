@@ -6,6 +6,7 @@ Use this checklist after loading the unpacked extension in Chrome and opening `h
 
 - `primary_voted`
 - `secondary_voted`
+- `source_voted`
 - `skipped_no_index`
 - `skipped_not_new`
 - `skipped_duplicate`
@@ -35,3 +36,7 @@ Use this checklist after loading the unpacked extension in Chrome and opening `h
    - Expected: restored as armed with `blocked_index_required`; no votes until indexes are entered again.
 10. Check latency after a successful vote.
    - Expected: popup shows last latency in milliseconds, typically near target (<120ms best effort).
+11. Enable source matching with source `1+1`, then send a poll with `1+ 1`, `2+1`, `3+1`, and `1+1 bahceli`.
+   - Expected: the first option is clicked and status is `source_voted`.
+12. Disable source matching and repeat an indexed vote.
+   - Expected: existing primary/secondary index behavior is unchanged.

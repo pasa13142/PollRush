@@ -3,6 +3,8 @@
 const elements = {
   primaryIndex: document.getElementById("primaryIndex"),
   secondaryIndex: document.getElementById("secondaryIndex"),
+  sourceModeEnabled: document.getElementById("sourceModeEnabled"),
+  sourceText: document.getElementById("sourceText"),
   armUpdateButton: document.getElementById("armUpdateButton"),
   disarmButton: document.getElementById("disarmButton"),
   errorText: document.getElementById("errorText"),
@@ -41,8 +43,17 @@ function parsePositiveInt(raw, required) {
 function setControlsEnabled(enabled) {
   elements.primaryIndex.disabled = !enabled;
   elements.secondaryIndex.disabled = !enabled;
+  elements.sourceModeEnabled.disabled = !enabled;
+  elements.sourceText.disabled = !enabled || !elements.sourceModeEnabled.checked;
   elements.armUpdateButton.disabled = !enabled;
   elements.disarmButton.disabled = !enabled;
+}
+
+function syncSourceModeControls() {
+  const sourceModeEnabled = Boolean(elements.sourceModeEnabled.checked);
+  elements.sourceText.disabled = !sourceModeEnabled;
+  elements.primaryIndex.disabled = sourceModeEnabled;
+  elements.secondaryIndex.disabled = sourceModeEnabled;
 }
 
 function renderStatus(status) {
@@ -112,10 +123,17 @@ async function refreshStatus() {
 }
 
 async function onArmOrUpdate() {
-  const primaryIndex = parsePositiveInt(elements.primaryIndex.value, true);
+  const sourceModeEnabled = Boolean(elements.sourceModeEnabled.checked);
+  const sourceText = elements.sourceText.value.trim();
+  const primaryIndex = parsePositiveInt(elements.primaryIndex.value, !sourceModeEnabled);
   const secondaryIndex = parsePositiveInt(elements.secondaryIndex.value, false);
 
-  if (primaryIndex === null) {
+  if (sourceModeEnabled && !sourceText) {
+    showError("Source text is required when source matching is enabled.");
+    return;
+  }
+
+  if (!sourceModeEnabled && primaryIndex === null) {
     showError("Primary index is required and must be >= 1.");
     return;
   }
@@ -133,7 +151,9 @@ async function onArmOrUpdate() {
       payload: {
         armed: true,
         primaryIndex,
-        secondaryIndex
+        secondaryIndex,
+        sourceModeEnabled,
+        sourceText
       }
     });
     renderStatus(status);
@@ -161,6 +181,7 @@ async function onDisarm() {
 async function initializePopup() {
   elements.armUpdateButton.addEventListener("click", onArmOrUpdate);
   elements.disarmButton.addEventListener("click", onDisarm);
+  elements.sourceModeEnabled.addEventListener("change", syncSourceModeControls);
 
   const tab = await getActiveTab();
   if (!tab?.id || !isWhatsAppWebUrl(tab.url)) {
@@ -179,6 +200,7 @@ async function initializePopup() {
 
   activeTabId = tab.id;
   setControlsEnabled(true);
+  syncSourceModeControls();
   await refreshStatus();
 
   refreshIntervalId = window.setInterval(() => {

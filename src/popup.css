@@ -38,6 +38,18 @@ input {
   background: #ffffff;
 }
 
+input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .button-row {
   display: flex;
   gap: 8px;

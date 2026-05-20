@@ -16,6 +16,14 @@
       <label for="secondaryIndex">Secondary Index (optional)</label>
       <input id="secondaryIndex" type="number" min="1" step="1" inputmode="numeric" placeholder="e.g. 4" />
 
+      <label class="checkbox-row" for="sourceModeEnabled">
+        <input id="sourceModeEnabled" type="checkbox" />
+        Use source matching
+      </label>
+
+      <label for="sourceText">Source Text</label>
+      <input id="sourceText" type="text" placeholder="e.g. 1+1" />
+
       <div class="button-row">
         <button id="armUpdateButton" type="button">Arm / Update</button>
         <button id="disarmButton" type="button" class="secondary">Disarm</button>
