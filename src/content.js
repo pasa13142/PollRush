@@ -191,10 +191,22 @@
   }
 
   function resolveClickableOption(optionNode, messageRoot) {
+    if (optionNode.matches("button, [role='radio'], [role='checkbox']")) {
+      return optionNode;
+    }
+
+    if (optionNode.matches("[data-testid*='poll-option'], [data-testid*='poll_option']")) {
+      return optionNode;
+    }
+
+    if (optionNode.matches("[aria-checked]") && isPollishOptionNode(optionNode, messageRoot)) {
+      return optionNode;
+    }
+
     let current = optionNode;
 
     while (current && current !== messageRoot) {
-      if (current.matches("button, [role='radio'], [role='checkbox'], [aria-checked]")) {
+      if (current.matches("button, [role='radio'], [role='checkbox']")) {
         return current;
       }
       current = current.parentElement;
@@ -203,24 +215,111 @@
     return optionNode;
   }
 
+  function isPollishOptionNode(optionNode, messageRoot) {
+    const testId = (optionNode.getAttribute("data-testid") || "").toLowerCase();
+    if (testId.includes("poll-option") || testId.includes("poll_option")) {
+      return true;
+    }
+
+    const pollOptionAncestor = optionNode.closest("[data-testid*='poll-option'], [data-testid*='poll_option']");
+    return Boolean(pollOptionAncestor && messageRoot.contains(pollOptionAncestor));
+  }
+
+  function resolveOptionContainer(optionNode, clickableNode, messageRoot) {
+    let current = clickableNode || optionNode;
+
+    while (current && current !== messageRoot) {
+      if (current.matches("[data-testid*='poll-option'], [data-testid*='poll_option']")) {
+        return current;
+      }
+
+      current = current.parentElement;
+    }
+
+    return clickableNode || optionNode;
+  }
+
+  function isNestedOptionContainer(container, seenContainers) {
+    for (const seenContainer of seenContainers) {
+      if (seenContainer !== container && seenContainer.contains(container)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function removeNestedOptionContainers(container, seenContainers, seenClickables, options) {
+    for (const seenContainer of Array.from(seenContainers)) {
+      if (seenContainer !== container && container.contains(seenContainer)) {
+        seenContainers.delete(seenContainer);
+
+        const nestedOptionIndex = options.findIndex((option) => option.container === seenContainer);
+        if (nestedOptionIndex !== -1) {
+          seenClickables.delete(options[nestedOptionIndex].clickable);
+          options.splice(nestedOptionIndex, 1);
+        }
+      }
+    }
+  }
+
   function isPollishOption(optionNode, clickableNode, messageRoot) {
     const role = clickableNode.getAttribute("role");
     if (role === "radio" || role === "checkbox") {
       return true;
     }
 
-    if (clickableNode.hasAttribute("aria-checked") || optionNode.hasAttribute("aria-checked")) {
+    if (
+      (clickableNode.hasAttribute("aria-checked") || optionNode.hasAttribute("aria-checked")) &&
+      (isPollishOptionNode(clickableNode, messageRoot) || isPollishOptionNode(optionNode, messageRoot))
+    ) {
       return true;
     }
 
     const clickableTestId = (clickableNode.getAttribute("data-testid") || "").toLowerCase();
     const optionTestId = (optionNode.getAttribute("data-testid") || "").toLowerCase();
-    if (clickableTestId.includes("poll") || optionTestId.includes("poll")) {
+    if (
+      clickableTestId.includes("poll-option") ||
+      clickableTestId.includes("poll_option") ||
+      optionTestId.includes("poll-option") ||
+      optionTestId.includes("poll_option")
+    ) {
       return true;
     }
 
-    const pollAncestor = optionNode.closest("[data-testid*='poll']");
-    return Boolean(pollAncestor && messageRoot.contains(pollAncestor));
+    return isPollishOptionNode(optionNode, messageRoot) || isPollishOptionNode(clickableNode, messageRoot);
+  }
+
+  function compareDocumentPosition(a, b) {
+    if (a === b) {
+      return 0;
+    }
+
+    const position = a.compareDocumentPosition(b);
+    if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+      return -1;
+    }
+    if (position & Node.DOCUMENT_POSITION_PRECEDING) {
+      return 1;
+    }
+
+    return 0;
+  }
+
+  function normalizePollOptions(options) {
+    const normalized = [];
+    const seenClickables = new Set();
+
+    for (const option of options.sort((left, right) => compareDocumentPosition(left.container, right.container))) {
+      if (seenClickables.has(option.clickable)) {
+        continue;
+      }
+
+      seenClickables.add(option.clickable);
+      normalized.push(option.clickable);
+    }
+
+    return normalized;
   }
 
   function extractPollOptions(messageRoot) {
@@ -229,15 +328,21 @@
     }
 
     const options = [];
-    const seen = new Set();
+    const seenClickables = new Set();
+    const seenContainers = new Set();
 
     for (const option of messageRoot.querySelectorAll(OPTION_QUERY)) {
       const clickable = resolveClickableOption(option, messageRoot);
-      if (!clickable || seen.has(clickable)) {
+      if (!clickable) {
         continue;
       }
 
       if (!isPollishOption(option, clickable, messageRoot)) {
+        continue;
+      }
+
+      const container = resolveOptionContainer(option, clickable, messageRoot);
+      if (!container || isNestedOptionContainer(container, seenContainers)) {
         continue;
       }
 
@@ -253,11 +358,18 @@
         continue;
       }
 
-      options.push(clickable);
-      seen.add(clickable);
+      removeNestedOptionContainers(container, seenContainers, seenClickables, options);
+
+      if (seenClickables.has(clickable) || seenContainers.has(container)) {
+        continue;
+      }
+
+      options.push({ container, clickable });
+      seenClickables.add(clickable);
+      seenContainers.add(container);
     }
 
-    return options;
+    return normalizePollOptions(options);
   }
 
   function extractOptionLabel(element) {
